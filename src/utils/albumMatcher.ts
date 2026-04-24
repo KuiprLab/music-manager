@@ -15,6 +15,8 @@ import type { FileSearchResponse } from "../soulseek-ts/messages/from/peer.js";
 import { FileAttribute } from "../soulseek-ts/messages/common.js";
 import type { MBTrack } from "./musicbrainz.js";
 import { normalize, similarity } from "./rank.js";
+import type { Settings } from "./settings.js";
+import { passesFilters } from "./settings.js";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -143,6 +145,9 @@ export function groupByFolder(
  * Find the best folder match for an album tracklist.
  *
  * Returns ranked list of folder matches, best first.
+ * When settings are provided, only files passing format+bitrate filters are
+ * considered for track matching. If no folder passes with filters, retries
+ * without filters and marks the match as relaxed.
  */
 export function findFolderMatches(
   results: FileSearchResponse[],
@@ -150,51 +155,66 @@ export function findFolderMatches(
   artist: string,
   album: string,
   minCoverage = 0.5,
+  settings?: Settings,
 ): FolderMatch[] {
   const folders = groupByFolder(results);
-  const matches: FolderMatch[] = [];
 
-  for (const [key, files] of folders) {
-    const [username, folder] = key.split("\x00") as [string, string];
+  const buildMatches = (useFilters: boolean): FolderMatch[] => {
+    const matches: FolderMatch[] = [];
 
-    // Skip tiny folders (likely not album folders)
-    if (files.length < Math.min(3, tracks.length * 0.4)) continue;
+    for (const [key, allFiles] of folders) {
+      const [username, folder] = key.split("\x00") as [string, string];
 
-    const pathScore = scoreFolder(folder, artist, album);
+      // Apply settings filter to candidate files for this folder
+      const files =
+        useFilters && settings
+          ? allFiles.filter((f) =>
+              passesFilters(f.filename, f.bitrate, settings),
+            )
+          : allFiles;
 
-    // Match each track to the best file in this folder
-    const trackMatches: TrackMatch[] = tracks.map((track) => {
-      const scored = files
-        .map((f) => ({ f, score: scoreFileForTrack(f, track) }))
-        .sort((a, b) => b.score - a.score);
+      // Skip tiny folders (likely not album folders)
+      if (files.length < Math.min(3, tracks.length * 0.4)) continue;
 
-      const best = scored[0];
-      // Only accept if score is good enough
-      const file = best && best.score >= 0.35 ? best.f : undefined;
-      return { track, file };
+      const pathScore = scoreFolder(folder, artist, album);
+
+      // Match each track to the best file in this folder
+      const trackMatches: TrackMatch[] = tracks.map((track) => {
+        const scored = files
+          .map((f) => ({ f, score: scoreFileForTrack(f, track) }))
+          .sort((a, b) => b.score - a.score);
+
+        const best = scored[0];
+        const file = best && best.score >= 0.35 ? best.f : undefined;
+        return { track, file };
+      });
+
+      const matched = trackMatches.filter((t) => t.file !== undefined).length;
+      const coverageScore = matched / tracks.length;
+
+      if (coverageScore < minCoverage) continue;
+
+      matches.push({
+        username,
+        folder,
+        coverageScore,
+        pathScore,
+        files: trackMatches,
+        allFiles: files,
+      });
+    }
+
+    matches.sort((a, b) => {
+      const covDiff = b.coverageScore - a.coverageScore;
+      if (Math.abs(covDiff) > 0.1) return covDiff;
+      return b.pathScore - a.pathScore;
     });
 
-    const matched = trackMatches.filter((t) => t.file !== undefined).length;
-    const coverageScore = matched / tracks.length;
+    return matches;
+  };
 
-    if (coverageScore < minCoverage) continue;
-
-    matches.push({
-      username,
-      folder,
-      coverageScore,
-      pathScore,
-      files: trackMatches,
-      allFiles: files,
-    });
-  }
-
-  // Sort: coverage first, then path score
-  matches.sort((a, b) => {
-    const covDiff = b.coverageScore - a.coverageScore;
-    if (Math.abs(covDiff) > 0.1) return covDiff;
-    return b.pathScore - a.pathScore;
-  });
-
-  return matches;
+  // Try with filters first; fall back to unfiltered if nothing passes
+  const filtered = buildMatches(true);
+  if (filtered.length > 0) return filtered;
+  return buildMatches(false);
 }

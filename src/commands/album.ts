@@ -2,6 +2,9 @@ import {
   SlashCommandBuilder,
   ChatInputCommandInteraction,
   EmbedBuilder,
+  ActionRowBuilder,
+  ButtonBuilder,
+  ButtonStyle,
 } from "discord.js";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -11,9 +14,9 @@ import {
   type MBAlbum,
   type MBTrack,
 } from "../utils/musicbrainz.js";
-import { findFolderMatches } from "../utils/albumMatcher.js";
+import { findFolderMatches, type FolderMatch } from "../utils/albumMatcher.js";
 import { ItemStatus, ItemStatusColor } from "../types/item.js";
-import { formatDuration } from "./single.js";
+import { getSettings } from "../utils/settings.js";
 
 export const data = new SlashCommandBuilder()
   .setName("album")
@@ -43,9 +46,23 @@ const TRACK_ICON: Record<TrackStatus, string> = {
   missing: "❓",
 };
 
+// ─── Pending store ────────────────────────────────────────────────────────────
+
+interface PendingAlbum {
+  album: MBAlbum;
+  trackStates: TrackState[];
+  folderMatch: FolderMatch;
+}
+
+const pendingAlbums = new Map<string, PendingAlbum>();
+
+export function getPendingAlbum(storeKey: string): PendingAlbum | undefined {
+  return pendingAlbums.get(storeKey);
+}
+
 // ─── Embed ────────────────────────────────────────────────────────────────────
 
-function buildAlbumEmbed(
+export function buildAlbumEmbed(
   album: MBAlbum,
   tracks: TrackState[],
   status: ItemStatus,
@@ -90,33 +107,150 @@ function buildAlbumEmbed(
   return embed;
 }
 
-// ─── Download helper ──────────────────────────────────────────────────────────
+export function buildAlbumActionRow(
+  storeKey: string,
+  enabled: boolean,
+): ActionRowBuilder<ButtonBuilder> {
+  return new ActionRowBuilder<ButtonBuilder>().addComponents(
+    new ButtonBuilder()
+      .setCustomId(`album:confirm:${storeKey}`)
+      .setLabel("Download Album")
+      .setStyle(ButtonStyle.Success)
+      .setDisabled(!enabled),
+    new ButtonBuilder()
+      .setCustomId(`album:cancel:${storeKey}`)
+      .setLabel("Cancel")
+      .setStyle(ButtonStyle.Secondary)
+      .setDisabled(!enabled),
+  );
+}
 
-async function downloadFile(
-  username: string,
-  filename: string,
-  destDir: string,
+// ─── Download + verify (exported for button handler) ─────────────────────────
+
+export async function runAlbumDownload(
+  pending: PendingAlbum,
+  editReply: (opts: {
+    embeds: EmbedBuilder[];
+    components?: ActionRowBuilder<ButtonBuilder>[];
+  }) => Promise<unknown>,
 ): Promise<void> {
-  const client = await getSlskClient();
-  const download = await client.download(username, filename);
+  const { album, trackStates, folderMatch } = pending;
 
-  const basename = filename.replace(/\\/g, "/").split("/").pop() ?? filename;
-  const tmpDir = path.join(destDir, ".tmp");
-  fs.mkdirSync(tmpDir, { recursive: true });
+  const destDir = path.join(
+    process.env.DOWNLOAD_DIR ?? "./downloads",
+    album.artist,
+    album.title,
+  );
+  fs.mkdirSync(destDir, { recursive: true });
 
-  const tmpPath = path.join(tmpDir, `${Date.now()}_${basename}`);
-  const outPath = path.join(destDir, basename);
+  const toDownload = folderMatch.files.filter((tm) => tm.file !== undefined);
 
-  await new Promise<void>((resolve, reject) => {
-    const out = fs.createWriteStream(tmpPath);
-    download.stream.pipe(out);
-    download.stream.on("error", reject);
-    out.on("error", reject);
-    download.events.on("complete", () => resolve());
-    download.stream.on("end", () => resolve());
+  let lastUpdate = Date.now();
+  const THROTTLE_MS = 3_000;
+
+  const maybeUpdate = async (msg?: string): Promise<void> => {
+    if (Date.now() - lastUpdate >= THROTTLE_MS) {
+      lastUpdate = Date.now();
+      await editReply({
+        embeds: [
+          buildAlbumEmbed(album, trackStates, ItemStatus.Downloading, msg),
+        ],
+      });
+    }
+  };
+
+  // ── Download loop ─────────────────────────────────────────────────────────
+  for (const tm of toDownload) {
+    if (!tm.file) continue;
+    const state = trackStates.find(
+      (t) => t.track.position === tm.track.position,
+    );
+    if (!state) continue;
+
+    state.status = "downloading";
+    await maybeUpdate(`Track ${tm.track.position}/${album.trackCount}`);
+
+    const basename =
+      tm.file.filename.replace(/\\/g, "/").split("/").pop() ?? tm.file.filename;
+    const tmpDir = path.join(destDir, ".tmp");
+    const tmpPath = path.join(tmpDir, `${Date.now()}_${basename}`);
+    const outPath = path.join(destDir, basename);
+    fs.mkdirSync(tmpDir, { recursive: true });
+
+    try {
+      const client = await getSlskClient();
+      const download = await client.download(
+        tm.file.username,
+        tm.file.filename,
+      );
+
+      await new Promise<void>((resolve, reject) => {
+        const out = fs.createWriteStream(tmpPath);
+        download.stream.pipe(out);
+        download.stream.on("error", reject);
+        out.on("error", reject);
+        download.events.on("complete", () => resolve());
+        download.stream.on("end", () => resolve());
+      });
+
+      fs.renameSync(tmpPath, outPath);
+      state.status = "done";
+      console.log(`[album] ✓ ${tm.track.position}. ${tm.track.title}`);
+    } catch (err) {
+      try {
+        fs.unlinkSync(tmpPath);
+      } catch {
+        /* ignore */
+      }
+      state.status = "failed";
+      state.error = String(err).slice(0, 50);
+      console.error(`[album] ✗ ${tm.track.position}. ${tm.track.title}:`, err);
+    }
+
+    await maybeUpdate(`Track ${tm.track.position}/${album.trackCount}`);
+  }
+
+  // ── Verify ────────────────────────────────────────────────────────────────
+  console.log(`[album] verifying files in ${destDir}`);
+  for (const tm of toDownload) {
+    if (!tm.file) continue;
+    const state = trackStates.find(
+      (t) => t.track.position === tm.track.position,
+    );
+    if (!state || state.status !== "done") continue;
+
+    const basename =
+      tm.file.filename.replace(/\\/g, "/").split("/").pop() ?? tm.file.filename;
+    const outPath = path.join(destDir, basename);
+
+    if (!fs.existsSync(outPath) || fs.statSync(outPath).size === 0) {
+      console.warn(`[album] ✗ verify failed: ${basename}`);
+      state.status = "failed";
+      state.error = "file missing after download";
+    } else {
+      console.log(
+        `[album] ✓ verified: ${basename} (${fs.statSync(outPath).size} bytes)`,
+      );
+    }
+  }
+
+  // ── Final embed ───────────────────────────────────────────────────────────
+  const done = trackStates.filter((t) => t.status === "done").length;
+  const failed = trackStates.filter((t) => t.status === "failed").length;
+  const missing = trackStates.filter((t) => t.status === "missing").length;
+
+  const finalStatus =
+    done === album.trackCount
+      ? `All ${done} tracks verified and downloaded`
+      : `${done} verified · ${failed} failed · ${missing} not found`;
+
+  const finalItemStatus =
+    done === album.trackCount ? ItemStatus.Done : ItemStatus.Failed;
+
+  await editReply({
+    embeds: [buildAlbumEmbed(album, trackStates, finalItemStatus, finalStatus)],
+    components: [],
   });
-
-  fs.renameSync(tmpPath, outPath);
 }
 
 // ─── Command execute ──────────────────────────────────────────────────────────
@@ -159,10 +293,9 @@ export async function execute(
   console.log(
     `[album] "${album.artist} - ${album.title}" (${album.trackCount} tracks)`,
   );
-
   const trackStates: TrackState[] = album.tracks.map((t) => ({
     track: t,
-    status: "pending",
+    status: "pending" as TrackStatus,
   }));
 
   // ── 2. Soulseek search ────────────────────────────────────────────────────
@@ -199,11 +332,14 @@ export async function execute(
   }
 
   // ── 3. Folder matching ────────────────────────────────────────────────────
+  const settings = getSettings();
   const folderMatches = findFolderMatches(
     rawResults,
     album.tracks,
     album.artist,
     album.title,
+    0.5,
+    settings,
   );
   const best = folderMatches[0];
 
@@ -214,103 +350,43 @@ export async function execute(
     );
   }
 
-  // Mark missing tracks
-  if (best) {
-    for (const tm of best.files) {
-      if (!tm.file) {
-        const state = trackStates.find(
-          (t) => t.track.position === tm.track.position,
-        );
-        if (state) state.status = "missing";
-      }
-    }
-  } else {
+  if (!best) {
     for (const t of trackStates) t.status = "missing";
+    await interaction.editReply({
+      embeds: [
+        buildAlbumEmbed(
+          album,
+          trackStates,
+          ItemStatus.Failed,
+          "No folder match found on Soulseek",
+        ),
+      ],
+    });
+    return;
   }
 
-  const sourceLabel = best
-    ? `Downloading from \`${best.username}\`…`
-    : "No folder match — cannot download";
+  // Mark tracks that won't be found
+  for (const tm of best.files) {
+    if (!tm.file) {
+      const state = trackStates.find(
+        (t) => t.track.position === tm.track.position,
+      );
+      if (state) state.status = "missing";
+    }
+  }
+
+  // ── 4. Show confirm prompt ────────────────────────────────────────────────
+  const storeKey = interaction.id;
+  pendingAlbums.set(storeKey, { album, trackStates, folderMatch: best });
+  setTimeout(() => pendingAlbums.delete(storeKey), 15 * 60 * 1000);
+
+  const available = best.files.filter((tm) => tm.file !== undefined).length;
+  const coverageMsg = `Found \`${best.username}\` — ${available}/${album.trackCount} tracks available`;
 
   await interaction.editReply({
     embeds: [
-      buildAlbumEmbed(
-        album,
-        trackStates,
-        best ? ItemStatus.Downloading : ItemStatus.Failed,
-        sourceLabel,
-      ),
+      buildAlbumEmbed(album, trackStates, ItemStatus.Ready, coverageMsg),
     ],
-  });
-
-  if (!best) return;
-
-  // ── 4. Download ───────────────────────────────────────────────────────────
-  const destDir = path.join(
-    process.env.DOWNLOAD_DIR ?? "./downloads",
-    album.artist,
-    album.title,
-  );
-  fs.mkdirSync(destDir, { recursive: true });
-
-  const toDownload = best.files.filter((tm) => tm.file !== undefined);
-
-  let lastUpdate = Date.now();
-  const THROTTLE_MS = 3_000;
-
-  const maybeUpdate = async (msg?: string): Promise<void> => {
-    if (Date.now() - lastUpdate >= THROTTLE_MS) {
-      lastUpdate = Date.now();
-      await interaction.editReply({
-        embeds: [
-          buildAlbumEmbed(album!, trackStates, ItemStatus.Downloading, msg),
-        ],
-      });
-    }
-  };
-
-  for (const tm of toDownload) {
-    if (!tm.file) continue;
-
-    const state = trackStates.find(
-      (t) => t.track.position === tm.track.position,
-    );
-    if (!state) continue;
-
-    state.status = "downloading";
-    await maybeUpdate(`Track ${tm.track.position}/${album.trackCount}`);
-
-    try {
-      await downloadFile(tm.file.username, tm.file.filename, destDir);
-      state.status = "done";
-      console.log(`[album] ✓ ${tm.track.position}. ${tm.track.title}`);
-    } catch (err) {
-      state.status = "failed";
-      state.error = String(err).slice(0, 50);
-      console.error(`[album] ✗ ${tm.track.position}. ${tm.track.title}:`, err);
-    }
-
-    await maybeUpdate(`Track ${tm.track.position}/${album.trackCount}`);
-  }
-
-  // ── 5. Final embed ────────────────────────────────────────────────────────
-  const done = trackStates.filter((t) => t.status === "done").length;
-  const failed = trackStates.filter((t) => t.status === "failed").length;
-  const missing = trackStates.filter((t) => t.status === "missing").length;
-
-  const finalStatus =
-    done === album.trackCount
-      ? `All ${done} tracks downloaded`
-      : `${done} done · ${failed} failed · ${missing} not found`;
-
-  const finalItemStatus =
-    done === album.trackCount
-      ? ItemStatus.Done
-      : done > 0
-        ? ItemStatus.Done
-        : ItemStatus.Failed;
-
-  await interaction.editReply({
-    embeds: [buildAlbumEmbed(album, trackStates, finalItemStatus, finalStatus)],
+    components: [buildAlbumActionRow(storeKey, true)],
   });
 }

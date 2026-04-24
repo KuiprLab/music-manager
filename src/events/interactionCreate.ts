@@ -15,6 +15,12 @@ import {
   formatDuration,
 } from "../commands/single.js";
 import { MODAL_ID, handleModalSubmit } from "../commands/settings.js";
+import {
+  getPendingAlbum,
+  buildAlbumEmbed,
+  buildAlbumActionRow,
+  runAlbumDownload,
+} from "../commands/album.js";
 import { FileAttribute } from "../soulseek-ts/messages/common.js";
 import { PendingItem } from "../types/pending.js";
 import { ItemStatus, type ItemState } from "../types/item.js";
@@ -71,10 +77,46 @@ export async function execute(interaction: Interaction): Promise<void> {
   // ── Button interactions ────────────────────────────────────────────────────
   if (interaction.isButton()) {
     const parts = interaction.customId.split(":");
-    if (parts[0] !== "search") return;
-
+    const prefix = parts[0];
     const action = parts[1];
     const storeKey = parts[2]!;
+
+    // ── Album confirm / cancel ───────────────────────────────────────────────
+    if (prefix === "album") {
+      const pending = getPendingAlbum(storeKey);
+
+      if (action === "cancel" || !pending) {
+        const embed = pending
+          ? buildAlbumEmbed(
+              pending.album,
+              pending.trackStates,
+              ItemStatus.Failed,
+              "Cancelled",
+            )
+          : new EmbedBuilder().setColor(0xed4245).setDescription("Cancelled.");
+        await interaction.update({ embeds: [embed], components: [] });
+        return;
+      }
+
+      // confirm — disable buttons then run download
+      await interaction.update({
+        embeds: [
+          buildAlbumEmbed(
+            pending.album,
+            pending.trackStates,
+            ItemStatus.Downloading,
+            `Downloading from \`${pending.folderMatch.username}\`…`,
+          ),
+        ],
+        components: [buildAlbumActionRow(storeKey, false)],
+      });
+
+      await runAlbumDownload(pending, (opts) => interaction.editReply(opts));
+      return;
+    }
+
+    if (prefix !== "search") return;
+
     const cached = getMbCacheByKey(interaction, storeKey);
     const rec = cached?.rec;
     const coverUrl = cached?.coverUrl;
