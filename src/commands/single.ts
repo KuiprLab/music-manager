@@ -16,12 +16,12 @@ import { resolveMusicBrainz } from "../utils/musicbrainz.js";
 import { getSettings, passesFilters } from "../utils/settings.js";
 
 export const data = new SlashCommandBuilder()
-  .setName("search")
-  .setDescription("Search for music on Soulseek")
+  .setName("single")
+  .setDescription("Search and download a single")
   .addStringOption((opt) =>
     opt
       .setName("query")
-      .setDescription("Artist, album or track name")
+      .setDescription("Track name")
       .setRequired(true),
   );
 
