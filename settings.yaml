@@ -1,0 +1,4 @@
+formats:
+  - flac
+minBitrate: any
+preferredBitrate: any

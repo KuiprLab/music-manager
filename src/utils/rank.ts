@@ -5,8 +5,10 @@
  *   0.50 — token coverage: fraction of query tokens found in filename
  *   0.30 — normalized Levenshtein similarity against best substring
  *   0.10 — slot free bonus
- *   0.10 — bitrate bonus (normalized, capped at 320kbps)
+ *   0.10 — bitrate bonus (normalized to preferredBitrate, or 320 if "any")
  */
+
+import type { Settings } from "./settings.js";
 
 // ─── Levenshtein ─────────────────────────────────────────────────────────────
 
@@ -130,6 +132,7 @@ export function scoreFile(
   filename: string,
   slotsFree: boolean,
   bitrate: number | undefined,
+  settings?: Settings,
 ): ScoredFile {
   const queryNorm = normalize(query);
   const filenameNorm = normalize(filename.split(/[\\/]/).pop() ?? filename);
@@ -141,9 +144,29 @@ export function scoreFile(
   const strSim = bestSubstringSimilarity(queryNorm, filenameNorm);
 
   const slotBonus = slotsFree ? 0.1 : 0;
-  const bitrateBonus = Math.min((bitrate ?? 0) / 320, 1) * 0.1;
 
-  const score = coverage * 0.5 + strSim * 0.3 + slotBonus + bitrateBonus;
+  // Bitrate bonus: normalized to preferredBitrate (or 320 if "any"/unset)
+  const targetBitrate =
+    settings && settings.preferredBitrate !== "any"
+      ? settings.preferredBitrate
+      : 320;
+  const bitrateBonus = Math.min((bitrate ?? 0) / targetBitrate, 1) * 0.1;
+
+  // Format bonus: preferred formats rank higher within passing results
+  let formatBonus = 0;
+  if (settings && settings.formats !== "any" && settings.formats.length > 0) {
+    const ext = filename.split(".").pop()?.toLowerCase() ?? "";
+    const idx = settings.formats.indexOf(
+      ext as (typeof settings.formats)[number],
+    );
+    if (idx !== -1) {
+      // First format = full bonus, each subsequent = slightly less
+      formatBonus = (1 - idx / settings.formats.length) * 0.05;
+    }
+  }
+
+  const score =
+    coverage * 0.5 + strSim * 0.25 + slotBonus + bitrateBonus + formatBonus;
 
   return { score, coverage, strSim };
 }
