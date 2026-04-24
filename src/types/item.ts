@@ -1,4 +1,4 @@
-import type { MBTrack } from "../utils/musicbrainz.js";
+import type { MBAlbum, MBTrack } from "../utils/musicbrainz.js";
 
 export enum ItemStatus {
     Searching = "searching",
@@ -24,6 +24,6 @@ export interface ItemState {
     coverUrl: string | undefined,
     error?: string;
     statusMessage?: string;
-    data: MBTrack;
+    data: MBTrack | MBAlbum;
 }
 

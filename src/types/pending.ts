@@ -1,5 +1,4 @@
 import type { FileSearchResponse } from "../soulseek-ts/messages/from/peer.js";
-// ─── Pending state ────────────────────────────────────────────────────────────
 
 export type PendingEntry = {
     result: FileSearchResponse;
@@ -8,7 +7,6 @@ export type PendingEntry = {
 
 
 // PendingItem Class
-
 export class PendingItem {
     static pendingResults = new Map<string, PendingEntry[]>();
 
