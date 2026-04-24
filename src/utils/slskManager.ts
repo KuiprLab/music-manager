@@ -1,9 +1,4 @@
-/**
- * Singleton wrapper around SlskClient.
- * Connect once on bot ready; reuse for every search/download.
- */
-
-import { SlskClient } from "./slsk.js";
+import { SlskClient } from "../soulseek-ts/client.js";
 
 let client: SlskClient | null = null;
 
@@ -18,7 +13,7 @@ export async function getSlskClient(): Promise<SlskClient> {
   }
 
   client = new SlskClient();
-  await client.connect({ username, password });
+  await client.login(username, password);
   console.log(`[slsk] Connected as ${username}`);
   return client;
 }

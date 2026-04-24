@@ -1,8 +1,10 @@
 import type { Interaction } from "discord.js";
+import * as fs from "node:fs";
+import * as path from "node:path";
 import type { CommandModule } from "../utils/loader.js";
 import { getSlskClient } from "../utils/slskManager.js";
 import { getPendingResult } from "../commands/search.js";
-import * as path from "node:path";
+import { FileAttribute } from "../soulseek-ts/messages/common.js";
 
 export const name = "interactionCreate";
 export const once = false;
@@ -40,27 +42,32 @@ export async function execute(interaction: Interaction): Promise<void> {
       return;
     }
 
-    const name = file.filename.split(/[\\/]/).pop() ?? file.filename;
+    const fileName = file.filename.split(/[\\/]/).pop() ?? file.filename;
     await interaction.editReply(
-      `Downloading **${name}** from \`${result.username}\`…`,
+      `Downloading **${fileName}** from \`${result.username}\`…`,
     );
 
     const destDir = process.env.DOWNLOAD_DIR ?? "./downloads";
+    fs.mkdirSync(destDir, { recursive: true });
+    const outPath = path.join(destDir, fileName);
 
     try {
       const client = await getSlskClient();
-      const dl = await client.download({
-        username: result.username,
-        filename: file.filename,
-        destDir,
-        onProgress: (_received, _total) => {
-          // Could edit the message with progress here — skipping for now
-          // to avoid Discord rate limits on editReply
-        },
+      const download = await client.download(result.username, file.filename);
+
+      await new Promise<void>((resolve, reject) => {
+        const out = fs.createWriteStream(outPath);
+        download.stream.pipe(out);
+        download.stream.on("error", reject);
+        out.on("error", reject);
+        download.events.on("complete", () => resolve());
+        // Fallback: resolve when stream ends naturally
+        download.stream.on("end", () => resolve());
       });
 
+      const bytes = fs.statSync(outPath).size;
       await interaction.editReply(
-        `Downloaded **${path.basename(dl.filePath)}** (${formatBytes(dl.bytes)}) → \`${dl.filePath}\``,
+        `Downloaded **${fileName}** (${formatBytes(bytes)}) → \`${outPath}\``,
       );
     } catch (err) {
       await interaction.editReply(`Download failed: ${String(err)}`);

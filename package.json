@@ -12,7 +12,8 @@
   },
   "dependencies": {
     "discord.js": "^14.26.3",
-    "dotenv": "^17.4.2"
+    "dotenv": "^17.4.2",
+    "typed-emitter": "^2.1.0"
   },
   "devDependencies": {
     "@types/node": "^25.6.0",

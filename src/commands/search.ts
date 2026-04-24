@@ -7,7 +7,8 @@ import {
   ButtonStyle,
 } from "discord.js";
 import { getSlskClient } from "../utils/slskManager.js";
-import type { SlskSearchResult } from "../utils/slsk.js";
+import type { FileSearchResponse } from "../soulseek-ts/messages/from/peer.js";
+import { FileAttribute } from "../soulseek-ts/messages/common.js";
 
 export const data = new SlashCommandBuilder()
   .setName("search")
@@ -19,12 +20,12 @@ export const data = new SlashCommandBuilder()
       .setRequired(true),
   );
 
-// In-memory store of pending results keyed by interaction id
-// (Discord gives us 15 min on the token, good enough)
-const pendingResults = new Map<
-  string,
-  { result: SlskSearchResult; fileIndex: number }[]
->();
+interface PendingEntry {
+  result: FileSearchResponse;
+  fileIndex: number;
+}
+
+const pendingResults = new Map<string, PendingEntry[]>();
 
 export async function execute(
   interaction: ChatInputCommandInteraction,
@@ -45,7 +46,7 @@ export async function execute(
 
   await interaction.editReply(`Searching for **${query}**…`);
 
-  const rawResults = await client.search({ query, timeout: 10_000 });
+  const rawResults = await client.search(query, { timeout: 10_000 });
 
   if (rawResults.length === 0) {
     await interaction.editReply(`No results found for **${query}**.`);
@@ -54,24 +55,23 @@ export async function execute(
 
   // Flatten to individual files, sort by quality
   const flat = rawResults
-    .flatMap((r) =>
-      r.files.map((f, i) => ({ result: r, fileIndex: i, file: f })),
+    .flatMap((r, _ri) =>
+      r.files.map((f, fi) => ({ result: r, fileIndex: fi, file: f })),
     )
     .sort((a, b) => {
-      // Prefer slot-free peers, then higher bitrate
-      if (a.result.slotFree !== b.result.slotFree)
-        return a.result.slotFree ? -1 : 1;
-      return (b.file.bitrate ?? 0) - (a.file.bitrate ?? 0);
+      if (a.result.slotsFree !== b.result.slotsFree)
+        return a.result.slotsFree ? -1 : 1;
+      const bitrateA = a.file.attrs.get(FileAttribute.Bitrate) ?? 0;
+      const bitrateB = b.file.attrs.get(FileAttribute.Bitrate) ?? 0;
+      return bitrateB - bitrateA;
     })
     .slice(0, 10);
 
-  // Store for button handler
   const storeKey = interaction.id;
   pendingResults.set(
     storeKey,
     flat.map(({ result, fileIndex }) => ({ result, fileIndex })),
   );
-  // Auto-clean after 15 min
   setTimeout(() => pendingResults.delete(storeKey), 15 * 60 * 1000);
 
   const embed = new EmbedBuilder()
@@ -81,16 +81,17 @@ export async function execute(
       flat
         .map(({ result, file }, i) => {
           const name = file.filename.split(/[\\/]/).pop() ?? file.filename;
-          const bitrate = file.bitrate ? `${file.bitrate}kbps` : "?kbps";
-          const dur = file.duration ? formatDuration(file.duration) : "?:??";
-          const slot = result.slotFree ? "✓" : "·";
-          return `\`${i + 1}.\` ${slot} \`${bitrate}\` \`${dur}\` **${name}**`;
+          const bitrate = file.attrs.get(FileAttribute.Bitrate);
+          const duration = file.attrs.get(FileAttribute.Duration);
+          const bitrateStr = bitrate ? `${bitrate}kbps` : "?kbps";
+          const durStr = duration ? formatDuration(duration) : "?:??";
+          const slot = result.slotsFree ? "✓" : "·";
+          return `\`${i + 1}.\` ${slot} \`${bitrateStr}\` \`${durStr}\` **${name}**`;
         })
         .join("\n"),
     )
     .setFooter({ text: `${rawResults.length} peers · ✓ = slot free` });
 
-  // Buttons 1–10 across two rows (max 5 per row)
   const rows = [
     new ActionRowBuilder<ButtonBuilder>(),
     new ActionRowBuilder<ButtonBuilder>(),
@@ -115,7 +116,7 @@ export async function execute(
 export function getPendingResult(
   storeKey: string,
   index: number,
-): { result: SlskSearchResult; fileIndex: number } | undefined {
+): PendingEntry | undefined {
   return pendingResults.get(storeKey)?.[index];
 }
 
