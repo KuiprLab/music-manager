@@ -320,55 +320,86 @@ interface IReleaseWithMedia {
   };
 }
 
+type ReleaseGroupMatch = IReleaseGroup & {
+  score: number;
+  "primary-type"?: string;
+  "secondary-types"?: string[];
+  "artist-credit"?: { name?: string; artist: { name: string } }[];
+  "first-release-date"?: string;
+};
+
+async function searchReleaseGroups(
+  luceneQuery: string,
+  dismax = false,
+): Promise<ReleaseGroupMatch[]> {
+  console.log(
+    `[mb:album] trying: "${luceneQuery}"${dismax ? " (dismax)" : ""}`,
+  );
+  try {
+    const res = await mbApi.search("release-group", {
+      query: luceneQuery,
+      ...(dismax ? { dismax: "true" as unknown as boolean } : {}),
+    } as Parameters<typeof mbApi.search>[1]);
+
+    const list = res as unknown as { "release-groups": ReleaseGroupMatch[] };
+    return list["release-groups"] ?? [];
+  } catch (err) {
+    console.error(`[mb:album] search error for "${luceneQuery}":`, err);
+    return [];
+  }
+}
+
+function filterReleaseGroups(groups: ReleaseGroupMatch[]): ReleaseGroupMatch[] {
+  return groups
+    .filter(
+      (rg) =>
+        !(rg["secondary-types"] ?? []).some((t) => BAD_SECONDARY_TYPES.has(t)),
+    )
+    .filter((rg) =>
+      ["Album", "Single", "EP", ""].includes(rg["primary-type"] ?? ""),
+    );
+}
+
 /**
  * Search for an album by query string.
- * Returns full tracklist from MusicBrainz.
+ * Uses the same multi-split Lucene approach as resolveMusicBrainz.
  */
 export async function resolveAlbum(
   query: string,
 ): Promise<MBAlbum | undefined> {
   console.log(`[mb:album] resolving: "${query}"`);
 
-  // Search release-groups first (albums, not individual releases)
-  // Then pick the best studio release from the group.
-  const params = new URLSearchParams({
-    query,
-    fmt: "json",
-    limit: "10",
-    dismax: "true",
-  });
+  const splits = parseQuery(query);
 
-  const res = await mbApi.search("release-group", {
-    query,
-    dismax: "true" as unknown as boolean,
-  } as Parameters<typeof mbApi.search>[1]);
+  // Build attempts: structured queries first, dismax last
+  type Attempt = { q: string; dismax?: boolean };
+  const attempts: Attempt[] = [];
 
-  const rgList = res as unknown as {
-    "release-groups": (IReleaseGroup & {
-      score: number;
-      "primary-type"?: string;
-      "secondary-types"?: string[];
-      "artist-credit"?: { name?: string; artist: { name: string } }[];
-      "first-release-date"?: string;
-    })[];
-  };
+  for (const { artist, title } of splits) {
+    attempts.push({ q: `artistname:"${artist}" AND releasegroup:"${title}"` });
+  }
+  for (const { artist, title } of splits) {
+    attempts.push({ q: `artistname:(${artist}) AND releasegroup:"${title}"` });
+  }
+  attempts.push({ q: `releasegroup:"${query}"` });
+  attempts.push({ q: query, dismax: true });
 
-  const groups = (rgList["release-groups"] ?? [])
-    .filter((rg) => {
-      const sec: string[] = rg["secondary-types"] ?? [];
-      return !sec.some((t) => BAD_SECONDARY_TYPES.has(t));
-    })
-    .filter((rg) => {
-      const pt = rg["primary-type"] ?? "";
-      return ["Album", "Single", "EP", ""].includes(pt);
-    });
+  let topGroup: ReleaseGroupMatch | undefined;
 
-  if (groups.length === 0) {
+  for (const attempt of attempts) {
+    const all = await searchReleaseGroups(attempt.q, attempt.dismax);
+    const filtered = filterReleaseGroups(all);
+    if (filtered.length > 0) {
+      topGroup = filtered[0];
+      break;
+    }
+  }
+
+  if (!topGroup) {
     console.log(`[mb:album] no release groups found`);
     return undefined;
   }
 
-  const topGroup = groups[0]!;
   const artist =
     topGroup["artist-credit"]
       ?.map((c) => c.name ?? c.artist.name)

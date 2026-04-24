@@ -6,9 +6,7 @@ import {
   TextInputBuilder,
   TextInputStyle,
   ActionRowBuilder,
-  LabelBuilder,
-  StringSelectMenuBuilder,
-  StringSelectMenuOptionBuilder,
+  type ModalSubmitInteraction,
 } from "discord.js";
 import {
   getSettings,
@@ -31,74 +29,54 @@ export async function execute(
 ): Promise<void> {
   const s = getSettings();
 
-  const bitrateOptions = (label: string, currentValue: Bitrate | "any") =>
-    (["any", ...BITRATES] as const).map((b) =>
-      new StringSelectMenuOptionBuilder()
-        .setLabel(b === "any" ? "Any" : `${b} kbps`)
-        .setValue(String(b))
-        .setDefault(String(b) === String(currentValue)),
-    );
-
   const modal = new ModalBuilder()
     .setCustomId(MODAL_ID)
-    .setTitle("Download Settings");
-
-  const labelRow = (
-    label: string,
-    customId: string,
-    current: Bitrate | "any",
-  ) => {
-    const lb = new LabelBuilder()
-      .setLabel(label)
-      .setStringSelectMenuComponent(
-        new StringSelectMenuBuilder()
-          .setCustomId(customId)
-          .addOptions(bitrateOptions(customId, current)),
-      );
-    return (new ActionRowBuilder() as any).addComponents(lb as any) as any;
-  };
-
-  modal.addComponents(
-    // Formats — free text
-    new ActionRowBuilder<TextInputBuilder>().addComponents(
-      new TextInputBuilder()
-        .setCustomId("formats")
-        .setLabel("Formats (flac, mp3, ogg, aac, m4a, wav, any)")
-        .setStyle(TextInputStyle.Short)
-        .setValue(s.formats === "any" ? "any" : s.formats.join(", "))
-        .setPlaceholder("flac, mp3  —or—  any")
-        .setRequired(true),
-    ),
-new ActionRowBuilder<TextInputBuilder>().addComponents(
-  new TextInputBuilder()
-    .setCustomId("min_bitrate")
-    .setLabel("Minimum bitrate (e.g. 128, 320, any)")
-    .setStyle(TextInputStyle.Short)
-    .setValue(String(s.minBitrate))
-),
-
-new ActionRowBuilder<TextInputBuilder>().addComponents(
-  new TextInputBuilder()
-    .setCustomId("preferred_bitrate")
-    .setLabel("Preferred bitrate (e.g. 320, any)")
-    .setStyle(TextInputStyle.Short)
-    .setValue(String(s.preferredBitrate))
-),
-  );
+    .setTitle("Download Settings")
+    .addComponents(
+      new ActionRowBuilder<TextInputBuilder>().addComponents(
+        new TextInputBuilder()
+          .setCustomId("formats")
+          .setLabel("Formats (e.g. flac, mp3 — or — any)")
+          .setStyle(TextInputStyle.Short)
+          .setValue(s.formats === "any" ? "any" : s.formats.join(", "))
+          .setPlaceholder(`Options: ${FORMATS.join(", ")}, any`)
+          .setRequired(true),
+      ),
+      new ActionRowBuilder<TextInputBuilder>().addComponents(
+        new TextInputBuilder()
+          .setCustomId("min_bitrate")
+          .setLabel("Min bitrate (128/192/256/320 or any)")
+          .setStyle(TextInputStyle.Short)
+          .setValue(s.minBitrate === "any" ? "any" : String(s.minBitrate))
+          .setPlaceholder("e.g. 192  or  any")
+          .setRequired(true),
+      ),
+      new ActionRowBuilder<TextInputBuilder>().addComponents(
+        new TextInputBuilder()
+          .setCustomId("preferred_bitrate")
+          .setLabel("Preferred bitrate (128/192/256/320 or any)")
+          .setStyle(TextInputStyle.Short)
+          .setValue(
+            s.preferredBitrate === "any" ? "any" : String(s.preferredBitrate),
+          )
+          .setPlaceholder("e.g. 320  or  any")
+          .setRequired(true),
+      ),
+    );
 
   await interaction.showModal(modal);
 }
 
 export async function handleModalSubmit(
-  interaction: import("discord.js").ModalSubmitInteraction,
+  interaction: ModalSubmitInteraction,
 ): Promise<void> {
   const formatsRaw = interaction.fields.getTextInputValue("formats").trim();
-  // Bitrate fields are select menus inside Label components — values is the selected values array
-  const fields = interaction.fields as any;
-  const minBitrateRaw: string =
-    fields.getField("min_bitrate")?.values?.[0] ?? "any";
-  const preferredBitrateRaw: string =
-    fields.getField("preferred_bitrate")?.values?.[0] ?? "any";
+  const minBitrateRaw = interaction.fields
+    .getTextInputValue("min_bitrate")
+    .trim();
+  const preferredBitrateRaw = interaction.fields
+    .getTextInputValue("preferred_bitrate")
+    .trim();
 
   const patch: Parameters<typeof updateSettings>[0] = {};
   const errors: string[] = [];
@@ -151,13 +129,12 @@ export async function handleModalSubmit(
   }
 
   updateSettings(patch);
-  await interaction.reply({
-    embeds: [
-      new EmbedBuilder()
-        .setTitle("Download Settings")
-        .setColor(0xfee75c)
-        .setDescription(formatSettings(getSettings())),
-    ],
-    flags: 64,
-  });
+  await interaction.reply({ embeds: [settingsEmbed()], flags: 64 });
+}
+
+function settingsEmbed(): EmbedBuilder {
+  return new EmbedBuilder()
+    .setTitle("Download Settings")
+    .setColor(0xfee75c)
+    .setDescription(formatSettings(getSettings()));
 }
