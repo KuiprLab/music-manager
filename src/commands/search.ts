@@ -9,6 +9,7 @@ import {
 import { getSlskClient } from "../utils/slskManager.js";
 import type { FileSearchResponse } from "../soulseek-ts/messages/from/peer.js";
 import { FileAttribute } from "../soulseek-ts/messages/common.js";
+import { scoreFile } from "../utils/rank.js";
 
 export const data = new SlashCommandBuilder()
   .setName("search")
@@ -53,18 +54,17 @@ export async function execute(
     return;
   }
 
-  // Flatten to individual files, sort by quality
+  // Flatten, score, filter low-relevance, sort
   const flat = rawResults
-    .flatMap((r, _ri) =>
-      r.files.map((f, fi) => ({ result: r, fileIndex: fi, file: f })),
+    .flatMap((r) =>
+      r.files.map((f, fi) => {
+        const bitrate = f.attrs.get(FileAttribute.Bitrate);
+        const scored = scoreFile(query, f.filename, r.slotsFree, bitrate);
+        return { result: r, fileIndex: fi, file: f, ...scored };
+      }),
     )
-    .sort((a, b) => {
-      if (a.result.slotsFree !== b.result.slotsFree)
-        return a.result.slotsFree ? -1 : 1;
-      const bitrateA = a.file.attrs.get(FileAttribute.Bitrate) ?? 0;
-      const bitrateB = b.file.attrs.get(FileAttribute.Bitrate) ?? 0;
-      return bitrateB - bitrateA;
-    })
+    .filter((x) => x.coverage >= 0.5) // at least half the query tokens must match
+    .sort((a, b) => b.score - a.score)
     .slice(0, 10);
 
   const storeKey = interaction.id;
