@@ -69,6 +69,23 @@ docker run \
   ghcr.io/kuiprlab/music-manager:main
 ```
 
+### Docker Compose
+
+```yaml
+services:
+  music-manager:
+    image: ghcr.io/kuiprlab/music-manager:main
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DOWNLOAD_DIR: /downloads
+    volumes:
+      - ./settings.yaml:/app/settings.yaml
+      - ./downloads:/downloads
+```
+
+Create `settings.yaml` before first run (see [settings.yaml](#settingsyaml) above). Env vars are loaded from `.env` via `env_file`.
+
 ### Local
 
 ```sh
