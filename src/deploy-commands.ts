@@ -21,6 +21,17 @@ const allCommands = [
   singleCmd,
   settingsCmd,
 ] as unknown as CommandModule[];
+
+console.error("[deploy] Modules loaded:", allCommands.length);
+for (const cmd of allCommands) {
+  console.error("[deploy] cmd inspection:", {
+    hasData: !!cmd.data,
+    dataName: cmd.data?.name,
+    executeType: typeof cmd.execute,
+    keys: Object.keys(cmd as object),
+  });
+}
+
 const body = allCommands
   .filter((cmd) => cmd.data?.name && typeof cmd.execute === "function")
   .map((cmd) => cmd.data.toJSON());
