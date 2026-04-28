@@ -24,4 +24,4 @@ RUN yarn install --frozen-lockfile --production
 
 COPY --from=builder /app/dist ./dist
 
-CMD ["node", "--enable-source-maps", "dist/index.js"]
+CMD ["sh", "-c", "node --enable-source-maps dist/deploy-commands.js && node --enable-source-maps dist/index.js"]
