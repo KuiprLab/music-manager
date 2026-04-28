@@ -22,14 +22,11 @@ const allCommands = [
   settingsCmd,
 ] as unknown as CommandModule[];
 
-console.error("[deploy] Modules loaded:", allCommands.length);
+process.stderr.write(`[deploy] Modules loaded: ${allCommands.length}\n`);
 for (const cmd of allCommands) {
-  console.error("[deploy] cmd inspection:", {
-    hasData: !!cmd.data,
-    dataName: cmd.data?.name,
-    executeType: typeof cmd.execute,
-    keys: Object.keys(cmd as object),
-  });
+  process.stderr.write(
+    `[deploy] cmd: hasData=${!!cmd.data} name=${cmd.data?.name} executeType=${typeof cmd.execute} keys=${Object.keys(cmd as object).join(",")}\n`,
+  );
 }
 
 const body = allCommands
