@@ -23,7 +23,9 @@ async function loadFiles(dir: string): Promise<unknown[]> {
   const modules: unknown[] = [];
 
   for (const entry of entries) {
-    if (!entry.isFile() || !entry.name.endsWith(".ts")) continue;
+    if (!entry.isFile()) continue;
+    if (!entry.name.endsWith(".ts") && !entry.name.endsWith(".js")) continue;
+    if (entry.name.endsWith(".d.ts")) continue;
     const filePath = join(dir, entry.name);
     const fileUrl = pathToFileURL(filePath).href;
     const mod: unknown = await import(fileUrl);
