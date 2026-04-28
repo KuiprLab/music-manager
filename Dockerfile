@@ -11,4 +11,4 @@ RUN yarn install --frozen-lockfile
 COPY tsconfig.json ./
 COPY src/ ./src/
 
-CMD ["yarn", "tsx", "src/index.ts"]
+CMD ["yarn", "run", "exec"]
