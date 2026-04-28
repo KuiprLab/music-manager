@@ -7,6 +7,9 @@ import { setCommands } from "./events/interactionCreate.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
+// Redirect console.log to stderr so journald/podman captures it (stdout is buffered in non-TTY)
+console.log = console.error;
+
 const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 
 async function main(): Promise<void> {
