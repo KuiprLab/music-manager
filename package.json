@@ -5,20 +5,23 @@
   "main": "dist/index.js",
   "license": "MIT",
   "scripts": {
-    "exec": "tsx src/index.ts"
+    "build": "tsc",
+    "dev": "tsx src/index.ts",
+    "deploy": "tsx src/deploy-commands.ts",
+    "start": "node dist/index.js"
   },
   "dependencies": {
     "discord.js": "^14.26.3",
     "dotenv": "^17.4.2",
     "js-yaml": "^4.1.1",
     "musicbrainz-api": "^1.2.0",
-    "tsx": "^4.21.0",
     "typed-emitter": "^2.1.0"
   },
   "devDependencies": {
     "@types/js-yaml": "^4.0.9",
     "@types/node": "^25.6.0",
     "ts-node": "^10.9.2",
+    "tsx": "^4.21.0",
     "typescript": "^6.0.3"
   },
   "ts-node": {
