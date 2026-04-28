@@ -17,10 +17,11 @@ FROM node:22-alpine AS runner
 WORKDIR /app
 
 ENV NODE_ENV=production
+ENV NODE_OPTIONS="--unhandled-rejections=throw"
 
 COPY package.json yarn.lock ./
 RUN yarn install --frozen-lockfile --production
 
 COPY --from=builder /app/dist ./dist
 
-CMD ["node", "dist/index.js"]
+CMD ["node", "--enable-source-maps", "dist/index.js"]

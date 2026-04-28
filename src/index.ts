@@ -20,4 +20,17 @@ async function main(): Promise<void> {
   await client.login(process.env.DISCORD_TOKEN);
 }
 
-main();
+process.on("unhandledRejection", (reason) => {
+  console.error("[fatal] Unhandled rejection:", reason);
+  process.exit(1);
+});
+
+process.on("uncaughtException", (err) => {
+  console.error("[fatal] Uncaught exception:", err);
+  process.exit(1);
+});
+
+main().catch((err) => {
+  console.error("[fatal] Startup error:", err);
+  process.exit(1);
+});
