@@ -11,4 +11,4 @@ RUN yarn install --frozen-lockfile
 COPY tsconfig.json ./
 COPY src/ ./src/
 
-CMD ["node_modules/.bin/tsx", "src/index.ts"]
+CMD ["npx", "tsx", "src/index.ts"]
